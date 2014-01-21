@@ -1,6 +1,6 @@
 require 'rake'
 require 'rake/clean'
-require 'rake/gempackagetask'
+require 'rubygems/package_task'
 require 'rake/testtask'
 require 'fileutils'
 
@@ -47,7 +47,7 @@ spec = Gem::Specification.new do |s|
   s.post_install_message = '\n' + readme[0...readme.index('== How this works')]
 end
 
-Rake::GemPackageTask.new(spec) do |p|
+Gem::PackageTask.new(spec) do |p|
   p.need_tar = true if RUBY_PLATFORM !~ /mswin/
 end
 
