@@ -1,3 +1,5 @@
+require 'time'
+
 class TestRunner
   def initialize(project_path, report_assembler)
     @project_path = project_path
@@ -132,7 +134,7 @@ class TestRunner
     # REFACTOR to just report whichever scripts are invalid
     check_for_valid_scripts
     
-    @results[:timestamp][:start] = Time.now
+    @results[:timestamp][:start] = Time.now.iso8601
     Syslog.info "Starting CI for #{project_name}"
   end
     
@@ -156,7 +158,7 @@ class TestRunner
       Syslog.debug "Failed to test #{project_name}; version exit status was #{@results[:version][:exit_status]}"
     end
     
-    @results[:timestamp][:finish] = Time.now
+    @results[:timestamp][:finish] = Time.now.iso8601
     run_conclusion_script
   end
   

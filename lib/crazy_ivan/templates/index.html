@@ -113,7 +113,7 @@
       </div>
     </script>
     
-    <!-- build rult holder -->
+    <!-- build result holder -->
     <script type="text/html" id="resultTemplate">
       <div class="result <%= projectDomId %>-<%= version.output %>" style="display: none">
         <div>
@@ -198,12 +198,12 @@
             var domId = name.replace(/\./g, "");      // remove . from id name
             
             var timestamp = report.timestamp.finish;
-            report["longTimeStamp"] = Date.parse(timestamp.substring(4)).toString("MMM d");
+            report["longTimeStamp"] = Date.parse(timestamp).toString("MMM d");
             
             // To group the long time stamps (e.g. Feb 8)
             if(project.reports[i - 1] != undefined) {
               next_timestamp = project.reports[i - 1].timestamp.finish;
-              next_longTimeStamp = Date.parse(next_timestamp.substring(4)).toString("MMM d");
+              next_longTimeStamp = Date.parse(next_timestamp).toString("MMM d");
               
               if(report["longTimeStamp"] == next_longTimeStamp) {
                 report["longTimeStamp"] = "";
@@ -211,7 +211,7 @@
             }
             
             // Not sure why providing a 3-letter day trips up Date.js sometimes
-            report["shortTimeStamp"] = Date.parse(timestamp.substring(4)).toString("HH:mm");
+            report["shortTimeStamp"] = Date.parse(timestamp).toString("HH:mm");
             report["projectDomId"] = domId;
             
             $("#" + domId + " .results").append(tmpl("resultTemplate", report));
