@@ -1,0 +1,35 @@
+.project {
+  float: left;
+  width: 49%;
+}
+.break {
+  clear: both;
+  height: 10px;
+}
+
+.project.selected {
+  width: 100%;
+  clear: both;
+}
+
+body {
+  background-color: black;
+  color: #ddd;
+  font-size: 130%;
+}
+.status {
+  color: #999;
+}
+
+.project.first_error h2 {
+  color: red;
+}
+.project.all_errors h2 {
+  color: inherit;
+}
+.project.test_stage h2 {
+  color: #ccf;
+}
+.project.first_error.test_stage h2 {
+  color: orange;
+}

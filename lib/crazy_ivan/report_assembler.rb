@@ -14,11 +14,13 @@ class ReportAssembler
   def generate
     Dir.chdir(@projects_directory) do
       Dir['*'].each do |dir|
-        if File.directory?(dir)
+        if File.directory?("#{dir}/.ci")
           runners << TestRunner.new(File.join(@projects_directory, dir), self)
         end
       end
     end
+
+    @runners = runners.sort_by { |r| r.sort_order }
     
     Dir.chdir(@output_directory) do
       # Write out the index.html file
@@ -51,16 +53,20 @@ class ReportAssembler
           # update_project will be called from within the runner to stream the test output
           runner.test!
           update_project(runner)
+          runner.conclusion!
         end
         flush_build_progress(runner)
       end
     end
+  ensure
+    status 'Idle', :class => 'idle'
   end
   
   def update_index
     FileUtils.cp(File.expand_path("index.html", TEMPLATES_PATH), 'index.html')
-    FileUtils.mkdir_p('javascript')
-    FileUtils.cp(File.expand_path("date.js", File.join(TEMPLATES_PATH, 'javascript')), 'javascript/date.js')
+    ['javascript', 'stylesheets'].each do |dir|
+      FileUtils.cp_r(File.join(TEMPLATES_PATH, dir), '.')
+    end
   end
     
   def update_projects
@@ -111,6 +117,7 @@ class ReportAssembler
     
     Dir.chdir(project_path) do
       version = runner.results[:version][:output]
+      return true if version == 'DO-NOT-RUN'
       tested_versions = @projects[runner.project_name].map {|r| r['version']['output'] }
       tested_versions.include?(version)
     end
@@ -139,6 +146,19 @@ class ReportAssembler
     Dir.chdir(project_results_path) do
       File.open("currently_building.json", 'w+') do |f|
         f.puts({}.to_json)
+      end
+    end
+  end
+  
+  def status(message, options = {})
+    data = options.merge(
+      :message => message,
+      :timestamp => Time.now.to_f
+    )
+
+    Dir.chdir(@output_directory) do
+      File.open('status.json', 'w+') do |f|
+        f.puts(data.to_json)
       end
     end
   end

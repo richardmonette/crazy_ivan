@@ -5,7 +5,9 @@
     <title>Crazy Ivan: CI straight up.</title>
     
     <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4.1/jquery.min.js"></script>
+    <script type="text/javascript" src="javascript/jquery.query-2.1.7.js"></script>
     <script type="text/javascript" charset="utf-8" src="javascript/date.js"></script>
+    <script type="text/javascript" charset="utf-8" src="javascript/jquery.cookie.js"></script>
     <script type="text/javascript">
       // Simple JavaScript Templating
       // John Resig - http://ejohn.org/ - MIT Licensed
@@ -59,20 +61,29 @@
       .error {
         color: red;
       }
+      .soft-error {
+        color: orange;
+      }
 
       .project h2 { margin: 12px 0 0 0;}
 
-      .tests { margin: 0 0 0 18px;}
+      .tests { margin: 0 0 0 18px; height: 40px }
       .tests .test { margin-right: 8px}
+      .tests a.test {
+	      color: inherit;
+        text-decoration: none;
+      }
+      .tests a.test.error { color: red; }
       .tests a.test:hover { text-decoration: underline;}
       .tests .test.first { font-size: 100%;}
       .tests .test.active { font-weight: bold;}
 
       .result .timestamp { margin-right: 12px;}
-      .result .version { margin: 6px 0 6px 12px }
+      .result .summary { margin: 3px 0 }
+      .result .version { margin: 3px 0 3px 12px }
       .result .output { padding: 5px; color: silver; background: black; margin: 12px 18px 8px 18px; overflow: auto }
-      .result .output .update { margin: 6px 0 6px 12px }
-      .result .output .test { margin: 6px 0 6px 12px}
+      .result .output .update { margin: 3px 0 3px 12px }
+      .result .output .test { margin: 3px 0 3px 12px}
 
       .footer { 
         margin: 24px 0 0 0;
@@ -80,10 +91,19 @@
         width: 100%;
         text-align: center;
       }
+
+      #status { 
+        font-size: smaller;
+        color: #777;
+      }
+      #status.idle { color: #999 }
     </style>
   </head>
   <body>
     <h1>Projects</h1>
+
+    <p id="status">&hellip;</p>
+
     <div id="projects"></div>
     
     <div class="footer">
@@ -97,10 +117,14 @@
       <div id="<%= projectId %>" class="project">
         <h2><%= projectName %></h2>
         
-        <div class="tests"></div>
+        <div class="tests">Loading &hellip;</div>
         <div style="clear: left"></div>
         <div class="results"></div>
       <div>
+    </script>
+    
+    <script type="text/html" id="projectDivider">
+      <div class="break"></div>
     </script>
     
     <!-- test link template -->
@@ -108,7 +132,7 @@
       <div style="float: left; margin-right: 8px">
         <div style="float:left; height: 1.2em; font-size: 84%"><%= longTimeStamp %></div>
         <div style="clear: left">
-          <a id="<%= projectDomId %>-<%= version.output %>" class="test"><%= shortTimeStamp %></a>
+          <a href="#" id="<%= projectDomId %>-<%= version.output %>" class="test"><%= shortTimeStamp %></a>
         </div>
       </div>
     </script>
@@ -122,13 +146,21 @@
         </div>
         
         <div class="output">
-          <div class="version" style="display: none"><pre class="error"><%= version.error %></pre></div>
-          
+          <div class="summary">Version <%= version.exit_message %>.</div>
+          <div class="version"><pre class="error"><%= version.error %></pre></div>
+
+          <div class="summary">
+            Update <%= update.exit_message %>.
+            <a href="#" onclick="$(this).parent().parent().children(<%= "'.update'" %>).show(); $(this).hide(); return false;">Show output</a><br/>
+          </div>
           <div class="update" style="display: none">
             <pre><%= update.output %></pre>
             <pre class="error"><%= update.error %></pre>
           </div>
           
+          <div class="summary">
+            Test <%= test.exit_message %>.
+          </div>
           <div class="test">
             <pre><%= test.output.replace(/\</g, "&lt;").replace(/\>/g, "&gt;") %></pre>
             <pre class="error"><%= test.error %></pre>
@@ -140,21 +172,93 @@
     <script type="text/javascript" charset="utf-8">
       var json = {projects: []};
       var projectNames;
+      var showResult = window.location.hash.substring(1);
+      var lastTimestamp = $.cookie('timestamp') || makeTimestamp();
+      var currentStatus = null;
       
       jQuery(document).ready(function($) {
-        $.getJSON("projects.json", function(data) {
-          projectNames = data.projects;
-          jQuery.each(data.projects, function(i, projectName) {
-            addProjectToJson(projectName);
-          });
-        });
+        theme = $.query.get('theme');
+        if (theme != '') { loadTheme(theme); }
+
+        loadStatus();
+        loadProjects(lastTimestamp); // for quick display
+        setTimeout('loadProjects(makeTimestamp());', 5000); // for up-to-date info
+        setTimeout('reloadStatus()', 15000);
       });
       
-      function addProjectToJson(name) {
-        var projectJsonPath = name + "/reports.json";
+      function loadTheme(name) {
+        $("head").append("<link>");
+        css = $("head").children(":last");
+        css.attr({
+          rel:  "stylesheet",
+          type: "text/css",
+          href: "stylesheets/themes/" + name + ".css"
+        });
+      }
+      
+      function makeTimestamp() {
+        return new Date().getTime();
+      }
+      
+      function parseUTC(string) {
+        date = Date.parse(string);
+        return new Date(Date.UTC(
+          date.getYear() + 1900, date.getMonth(), date.getDate(),
+          date.getHours(), date.getMinutes(), date.getSeconds()
+        ));
+      }
+
+      function reloadStatus() {
+        loadStatus();
+        setTimeout('reloadStatus()', 15000);        
+      }
+      
+      function loadStatus() {
+        $.getJSON("status.json?" + makeTimestamp(), function(data) {
+          $('#status').text(data.message);
+          $('#status').removeClass().addClass(data['class']);
+
+          oldStatus = currentStatus;
+          currentStatus = data;
+          
+          if (oldStatus != null && data['timestamp'] != oldStatus['timestamp']) {
+            loadProjects(makeTimestamp());
+          }
+
+          updateStatusClass();
+        });
+      }
+          
+      function updateStatusClass() {
+        if (currentStatus == null) { return; }
+
+        var project = currentStatus['project'];
+        var stage   = currentStatus['stage'];
+
+        $('.project').removeClass('update_stage version_stage test_stage');
+        if (project && stage) {
+          var domId = project.replace(/\./g, ""); // remove . from id name
+          $('#' + domId).addClass(stage + '_stage');
+        }
+      }
+
+      function loadProjects(timestamp) {
+        $.getJSON("projects.json?" + timestamp, function(data) {
+          projectNames = data.projects;
+          trigger_render();
+
+          jQuery.each(data.projects, function(i, projectName) {
+            addProjectToJson(projectName, timestamp);
+          });
+          $.cookie('timestamp', timestamp);
+        });
+      }
+
+      function addProjectToJson(name, timestamp) {
+        var projectJsonPath = name + "/reports.json?" + timestamp;
         
         jQuery.getJSON(projectJsonPath, function(data) {
-          json.projects.push({'name': name, reports: data});
+          json.projects[name] = {'name': name, reports: data};
           trigger_render();
         });
       }
@@ -170,16 +274,26 @@
         
         // order the projects by what the projects.json returns
         for(var name in projectNames) {
+          var found = false;
           for(var project in projects) {
             if(projects[project].name == projectNames[name]) {
               orderedProjects.push(projects[project]);
+              found = true;
               break;
             }
+          }
+
+          if (!found) {
+            orderedProjects.push({'name': projectNames[name], reports: []});
           }
         }
         return orderedProjects;
       }
       
+      function projectBase(name) {
+        return name.split('-', 2)[0];
+      }
+            
       var render = function() {
         $('#projects').empty();
         
@@ -188,11 +302,29 @@
         jQuery.each(sortedProjects, function(i, project) {
           var name = project.name;
           var domId = name.replace(/\./g, "");      // remove . from id name
+
+          if (i > 0 && projectBase(sortedProjects[i-1].name) != projectBase(name)) {
+            $('#projects').append(tmpl("projectDivider", {}));
+          }
           
           // create project holder div
           $('#projects').append(tmpl("projectTemplate", {projectName: name, projectId: domId}));
           
-          jQuery.each(project.reports.reverse(), function(i, report) {
+          project.reports.sort(function (a, b) {
+            left  = Date._parse(a.timestamp.finish);
+            right = Date._parse(b.timestamp.finish);
+
+            return right - left;
+          });
+
+          if (project.reports.length > 0) {
+            $("#" + domId + " .tests").empty();
+          }
+
+          var all_errors = true;
+          var first_error = false;
+          
+          jQuery.each(project.reports, function(i, report) {
             var version = report.version.output;
             var resultJsonPath = name + "/" + version + ".json";
             var domId = name.replace(/\./g, "");      // remove . from id name
@@ -210,7 +342,6 @@
               }
             }
             
-            // Not sure why providing a 3-letter day trips up Date.js sometimes
             report["shortTimeStamp"] = Date.parse(timestamp).toString("HH:mm");
             report["projectDomId"] = domId;
             
@@ -218,24 +349,55 @@
             $("#" + domId + " .tests").append(tmpl("resultLinkTemplate", report));
             
             // add failed/success indication to link - inlining in the template screws up
-            if (report.test.exit_status && report.test.exit_status != '0') {
-              $("#" + domId + '-' + version).addClass('error');
+            if ((report.test.exit_status   && report.test.exit_status   != '0') ||
+                (report.update.exit_status && report.update.exit_status != '0')) {
+              if (report.test.exit_status == '123') {
+                $("#" + domId + '-' + version).addClass('soft-error');
+              } else {
+                $("#" + domId + '-' + version).addClass('error');
+                if (i == 0) { first_error = true; }
+              }
+            } else {
+              all_errors = false;
             }
           });
+          
+          if (all_errors ) { $('#' + domId).addClass('all_errors' ); }
+          if (first_error) { $('#' + domId).addClass('first_error'); }
         });
+
+        $('#projects').append(tmpl("projectDivider", {}));
+
+        if (showResult != '') {
+          var show = $('#' + showResult)[0];
+          if (show != null) {
+            select_result(show);
+          }
+        }
+
+        updateStatusClass();
       }
       
       // listen to clicking of test result links
-      $('#projects .project .tests a.test').live('click', function(e) {
+      var select_result = function(elem) {
         $('.result:visible').hide();
 
-        if($(e.target).hasClass('active')) {
-          $('.test').removeClass('active');
+        var active = $(elem).hasClass('active');
+        $('.test').removeClass('active');
+        $('.project').removeClass('selected');
+
+        if (active) {
+          showResult = '';
         } else {
-          $('.test').removeClass('active');
-          $('.result.' + e.target.id).show(); 
-          $(e.target).addClass('active');
+          $('.result.' + elem.id).show(); 
+          $(elem).addClass('active');
+          $(elem).closest('.project').addClass('selected');
+          showResult = elem.id;
         }
+      }
+      $('#projects .project .tests a.test').live('click', function (e) {
+	      e.preventDefault();
+        select_result(e.target);
       });
   </script>
   </body>

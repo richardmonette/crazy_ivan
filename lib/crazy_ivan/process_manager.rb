@@ -10,25 +10,26 @@ class ProcessManager
   end
   
   def self.acquire_lock!
-    lock
-    yield
-  ensure
-    unlock
-  end
-  
-  def self.unlock
-    @@lockfile.unlock
-  rescue Lockfile::UnLockError
-  end
-  
-  def self.lock
     Syslog.debug "Acquiring lock"
-    @@lockfile.lock
-    Syslog.debug("Locked CI process")
+    @@lockfile.lock do
+      Syslog.debug("Locked CI process")
+      yield
+    end
+    Syslog.debug("Unlocked CI process")
+  rescue Lockfile::StolenLockError
+    msg = "Lockfile has been stolen - aborting"
+    Syslog.err msg
+    puts msg
+    raise AlreadyRunningError, msg
   rescue Lockfile::LockError
     msg = "Detected another running CI process - cannot start"
     Syslog.warning msg
     puts msg
     raise AlreadyRunningError, msg
+  end
+  
+  def self.unlock!
+    File.unlink(@@lockfile.path)
+  rescue Errno::ENOENT
   end
 end

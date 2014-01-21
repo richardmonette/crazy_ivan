@@ -1,20 +1,26 @@
 require 'time'
+require 'cgi'
 
 class TestRunner
   def initialize(project_path, report_assembler)
     @project_path = project_path
-    @results = {:project_name => File.basename(@project_path),
-                :version => {:output => '', :error => '', :exit_status => ''},
-                :update  => {:output => '', :error => '', :exit_status => ''},
-                :test    => {:output => '', :error => '', :exit_status => ''},
-                :timestamp => {:start => nil, :finish => nil}}
     @report_assembler = report_assembler
+
+    @results = {
+      :project_name => File.basename(@project_path),
+      :timestamp => {:start => nil, :finish => nil}
+    }
+    [:version, :update, :test].each { |key| @results[key] = default_script_result }
   end
   
   attr_reader :results
   
   def project_name
     @results[:project_name]
+  end
+
+  def sort_order
+    [sort_file_contents, @results[:project_name]]    
   end
 
   def check_for_valid_scripts
@@ -51,66 +57,87 @@ class TestRunner
   end
   
   def run_script(name, options = {})
-    output = ''
-    error = ''
-    exit_status = ''
+    outputs = {
+      :output => '',
+      :error  => ''
+    }
+    exit_status  = nil
+    exit_message = ''
+    start_time = Time.now
     
     Dir.chdir(@project_path) do
       Syslog.debug "Opening up the pipe to #{script_path(name)}"
       
       status = Open4::popen4(script_path(name)) do |pid, stdin, stdout, stderr|
-        stdin.close  # Close to prevent hanging if the script wants input
+        begin
+          stdin.close  # Close to prevent hanging if the script wants input
         
-        until stdout.eof? && stderr.eof? do
-          ready_io_streams = select( [stdout], nil, [stderr], 3600 )
-          
-          script_output = ready_io_streams[0].pop
-          script_error = ready_io_streams[2].pop
-          
-          if script_output && !script_output.eof?
-            o = script_output.readpartial(4096)
-            print o
-            output << o
+          select_fds = {
+            stdout => :output,
+            stderr => :error
+          }
+          until select_fds.empty?
+            ready_fds = select(select_fds.keys, nil, nil, 900).first
+
+            if ready_fds.nil?
+              puts "Timeout, killing child."
+              Process.kill('TERM', pid)
+
+              ready_fds = select(select_fds.keys, nil, nil, 5).first
+              Process.kill('KILL', pid) rescue nil if ready_fds.nil?
+
+              ready_fds = []
+            end
+
+            ready_fds.each do |fd|
+              if fd.eof?
+                select_fds.delete(fd)
+                next
+              end
+              
+              o = fd.readpartial(4096)
+              print o
+
+              key = select_fds[fd]
+              outputs[key] << escape(o)
             
-            if options[:stream_test_results?]
-              @results[:test][:output] = output
-              @report_assembler.update_currently_building(self)
+              if options[:stream_test_results?]
+                @results[:test][key] = outputs[key]
+                @report_assembler.update_currently_building(self)
+              end
             end
           end
-          
-          if script_error && !script_error.eof?
-            e = script_error.readpartial(4096)
-            print e
-            error << e
-            
-            if options[:stream_test_results?]
-              @results[:test][:error] = error
-              @report_assembler.update_currently_building(self)
-            end
-          end
-          
-          # FIXME - this feels like I'm using IO.select wrong
-          if script_output.eof? && script_error.nil?
-            # there's no more output to SDOUT, and there aren't any errors
-            e = stderr.read
-            error << e
-            print e
-            
-            if options[:stream_test_results?]
-              @results[:test][:error] = error
-              @report_assembler.update_currently_building(self)
-            end
-          end
+        rescue Lockfile::StolenLockError => e
+          lockfile_stolen(name, pid)
+          raise e
         end
       end
       
-      exit_status = status.exitstatus
+      if status.success?
+        exit_status  = 0
+        exit_message = 'executed successfully'
+      elsif status.exited?
+        exit_status  = status.exitstatus
+        exit_message = "exited with status #{status.exitstatus}"
+      elsif status.signaled?
+        exit_status  = 128 + status.termsig # mimics shell '$?' behaviour
+        exit_message = "died with signal #{status.termsig}"
+      else
+        exit_status  = 255
+        exit_message = 'died of unknown causes'
+      end
     end
     
-    return output.chomp, error.chomp, exit_status.to_s
+    return {
+      :output => outputs[:output].chomp,
+      :error  => outputs[:error].chomp,
+      :exit_status  => exit_status.to_s,
+      :exit_message => exit_message,
+      :duration => Time.now - start_time
+    }
   end
   
-  def run_conclusion_script
+  def conclusion!
     # REFACTOR do this asynchronously so the next tests don't wait on running the conclusion
     
     Dir.chdir(@project_path) do
@@ -139,27 +166,30 @@ class TestRunner
   end
     
   def update!
-    Syslog.debug "Updating #{project_name}"
-    @results[:update][:output], @results[:update][:error], @results[:update][:exit_status] = run_script('update')
+    status :update, "Updating #{project_name}"
+    @results[:update] = run_script('update')
   end
   
   def version!
-    if @results[:update][:exit_status] == '0'
-      Syslog.debug "Acquiring build version for #{project_name}"
-      @results[:version][:output], @results[:version][:error], @results[:version][:exit_status] = run_script('version')
-    end
+    status :version, "Acquiring build version for #{project_name}"
+    @results[:version] = run_script('version')
   end
   
   def test!
-    if @results[:version][:exit_status] == '0'
-      Syslog.debug "Testing #{@results[:project_name]} build #{@results[:version][:output]}"
-      @results[:test][:output], @results[:test][:error], @results[:test][:exit_status] = run_script('test', :stream_test_results? => true)
+    if @results[:version][:exit_status] != '0'
+      Syslog.debug "Failed to test #{project_name}; version script #{@results[:version][:exit_message]}"
+    elsif @results[:update][:exit_status] != '0'
+      Syslog.debug "Failed to test #{project_name}; update script #{@results[:update][:exit_message]}"
     else
-      Syslog.debug "Failed to test #{project_name}; version exit status was #{@results[:version][:exit_status]}"
+      status :test, "Testing #{@results[:project_name]} build #{@results[:version][:output]}"
+      @results[:test] = result = run_script('test', :stream_test_results? => true)
+
+      if result[:output] =~ /E{100,}/
+        result[:output] = $` + $& + $'.lines.take(50).join + "\n*** #{$&.length} errors detected, output truncated. ***"
+      end
     end
     
     @results[:timestamp][:finish] = Time.now.iso8601
-    run_conclusion_script
   end
   
   def finished?
@@ -168,5 +198,66 @@ class TestRunner
   
   def still_building?
     !finished?
+  end
+  
+  private
+  
+  def sort_file_contents
+    sort_file = File.join(@project_path, '.ci', 'sort_order')
+    if File.exists?(sort_file)
+      File.read(sort_file, 10)
+    else
+      "\xff" * 10 # comes last
+    end
+  end
+  
+  def default_script_result
+    {:output => '', :error => '', :exit_status => '', :exit_message => 'not run'}
+  end
+  
+  def escape(text)
+    CGI.escapeHTML(text)
+  end
+  
+  def lockfile_stolen(name, pid)
+    catch (:success) do
+      Syslog.info("Lockfile stolen, interrupting #{name} script (PID #{pid}) ...")
+      Process.kill('INT', pid)
+
+      10.times do
+        sleep(1)
+        throw :success unless process_running?(pid)
+      end
+
+      Syslog.info("Forcibly killing #{name} script ...")
+      Process.kill('KILL', pid)
+
+      5.times do
+        sleep(1)
+        throw :success unless process_running?(pid)
+      end
+
+      raise "Script refuses to die."
+    end
+    
+    Syslog.info("Successfully terminated #{name} script.")
+  rescue Exception => e
+    Syslog.err("Error killing #{name} script: #{e.message} (#{e.class})")
+  end
+  
+  def process_running?(pid)
+    Process.waitpid(pid, Process::WNOHANG) # reap zombies
+    Process.kill(0, pid)
+    true
+  rescue Errno::ESRCH
+    false
+  end
+  
+  def status(stage, message)
+    @report_assembler.status(message,
+      :project => @results[:project_name],
+      :stage   => stage.to_s
+    )
+    Syslog.debug(message)
   end
 end

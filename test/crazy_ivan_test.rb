@@ -2,6 +2,10 @@ require 'test_helper'
 require 'tmpdir'
 
 class CrazyIvanTest < Test::Unit::TestCase
+  def setup
+    Dir.chdir(File.dirname(__FILE__) + '/..')
+  end
+
   def teardown
     `rm -rf test/ci-results`
   end
@@ -35,7 +39,7 @@ class CrazyIvanTest < Test::Unit::TestCase
     run_crazy_ivan {}
     run_crazy_ivan do
       TestRunner.any_instance.expects(:test!).times(0)
-      TestRunner.any_instance.expects(:run_conclusion_script).times(0)
+      TestRunner.any_instance.expects(:conclusion!).times(0)
       
       broken_test_results = JSON.parse(File.read('test/ci-results/broken-tests/reports.json'))
       broken_versions = broken_test_results.map {|r| r['version']['output'] }
@@ -78,6 +82,7 @@ class CrazyIvanTest < Test::Unit::TestCase
       assert test_results["test"]["output"]
       assert test_results["test"]["error"]
       assert test_results["test"]["exit_status"] == '1'
+      assert test_results["test"]["duration"] # FIXME use a number here
     end
   end
   
@@ -127,6 +132,33 @@ class CrazyIvanTest < Test::Unit::TestCase
     assert FileUtils.compare_file('test/projects/completely-working/.ci/version_original', 'test/projects/completely-working/.ci/version')
   ensure
     FileUtils.copy('test/projects/completely-working/.ci/version_original', 'test/projects/completely-working/.ci/version')
+  end
+  
+  def test_status_file
+    # Enable status copying in the update and test scripts.
+    ENV['COPY_STATUS'] = Dir.getwd + '/test/ci-results/status.json'
+
+    setup_crazy_ivan
+    run_crazy_ivan do
+      status = JSON.parse(File.read('test/ci-results/status.json.update'))
+      assert_equal 'Updating completely-working', status['message']
+      assert_equal 'completely-working', status['project']
+      assert_equal 'update', status['stage']
+      assert_in_delta Time.now.to_f, status['timestamp'], 2.0
+
+      status = JSON.parse(File.read('test/ci-results/status.json.test'))
+      assert_equal 'Testing completely-working build a-valid-version', status['message']
+      assert_equal 'completely-working', status['project']
+      assert_equal 'test', status['stage']
+      assert_in_delta Time.now.to_f, status['timestamp'], 2.0
+
+      status = JSON.parse(File.read('test/ci-results/status.json'))
+      assert_equal 'Idle', status['message']
+      assert_equal 'idle', status['class']
+      assert_nil status['project']
+      assert_nil status['stage']
+      assert_in_delta Time.now.to_f, status['timestamp'], 2.0
+    end
   end
   
   private
