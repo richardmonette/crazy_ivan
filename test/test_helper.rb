@@ -1,6 +1,7 @@
 require 'rubygems'
+gem 'mocha'
 require 'test/unit'
-require 'mocha'
+require 'mocha/test_unit'
 
 $LOAD_PATH.unshift(File.dirname(__FILE__))
 $LOAD_PATH.unshift(File.join(File.dirname(__FILE__), '..', 'lib'))

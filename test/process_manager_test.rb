@@ -3,7 +3,7 @@ require 'tempfile'
 
 class ProcessManagerTest < Test::Unit::TestCase
   def setup
-    Syslog.open('crazy_ivan-testing', Syslog::LOG_PID | Syslog::LOG_CONS)
+    Syslog.open('crazy_ivan-testing', Syslog::LOG_PID | Syslog::LOG_CONS) unless Syslog.opened?
     ProcessManager.lockfilepath = File.expand_path('test-crazy-ivan.lock', Dir.tmpdir)
     ProcessManager.unlock!
   end
